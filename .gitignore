@@ -1,0 +1,49 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Tests y herramientas
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# ---------- Django ----------
+# Base de datos local de desarrollo (cada uno genera la suya con migrate + seed_agenda)
+db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+# Archivos generados / subidos
+staticfiles/
+media/
+*.log
+
+# Configuración y secretos (AGENDA_SECRET_KEY, etc.)
+.env
+.env.*
+!.env.example
+
+# ---------- Editores ----------
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---------- Sistema operativo ----------
+Thumbs.db
+desktop.ini
+.DS_Store
