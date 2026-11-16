@@ -100,11 +100,15 @@ class Command(BaseCommand):
                 Feriado.objects.get_or_create(fecha=date(anio, mes, dia), defaults={"descripcion": descripcion})
         self.stdout.write(f"Feriados fijos de {hoy.year} y {hoy.year + 1}")
 
-        for nombre, precio, maximo in PRODUCTOS:
-            Producto.objects.get_or_create(
+        for numero, (nombre, precio, maximo) in enumerate(PRODUCTOS, start=1):
+            producto, _ = Producto.objects.get_or_create(
                 nombre=nombre, defaults={"precio_costo": Decimal(precio), "max_diario": maximo}
             )
-        self.stdout.write(f"Productos: {len(PRODUCTOS)}")
+            # Código de ejemplo para probar el escáner (QR o código de barras con este texto).
+            if not producto.codigo_barra:
+                producto.codigo_barra = f"AGENDAPP-{numero:04d}"
+                producto.save(update_fields=["codigo_barra", "actualizado"])
+        self.stdout.write(f"Productos: {len(PRODUCTOS)} (códigos de ejemplo AGENDAPP-0001 a AGENDAPP-{len(PRODUCTOS):04d})")
 
         inicio_tarifas = date(hoy.year, 1, 1)
         for username, monto in TARIFAS.items():
