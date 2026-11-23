@@ -649,3 +649,28 @@ class LiquidacionesApiTests(Base):
         self.assertEqual(self.cli_ana.post(url, {"motivo": "x"}, format="json").status_code, 403)
         r = self.jefe.post(url, {"motivo": "Cargado dos veces"}, format="json")
         self.assertTrue(r.json()["anulado"])
+
+
+class CodigoBarraTests(Base):
+    def test_codigo_vacio_se_guarda_como_null_y_no_choca(self):
+        self.cafe.codigo_barra = "  "
+        self.cafe.save()
+        self.sandwich.codigo_barra = ""
+        self.sandwich.save()
+        self.cafe.refresh_from_db()
+        self.assertIsNone(self.cafe.codigo_barra)
+
+    def test_api_codigo_unico(self):
+        jefe, _ = ApiTests.cliente(self, "jefe")
+        url = f"/api/productos/{self.cafe.pk}/"
+        r = jefe.patch(url, {"codigo_barra": " 7790001112223 "}, format="json")
+        self.assertEqual((r.status_code, r.json()["codigo_barra"]), (200, "7790001112223"))
+        r = jefe.patch(f"/api/productos/{self.sandwich.pk}/", {"codigo_barra": "7790001112223"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("codigo_barra", r.json())
+        r = jefe.patch(url, {"codigo_barra": ""}, format="json")
+        self.assertIsNone(r.json()["codigo_barra"])
+
+    def test_listado_incluye_codigo(self):
+        ana, _ = ApiTests.cliente(self, "ana")
+        self.assertIn("codigo_barra", ana.get("/api/productos/").json()[0])

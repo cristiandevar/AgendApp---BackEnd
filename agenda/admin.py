@@ -70,10 +70,10 @@ class FeriadoAdmin(HistorialProtegidoAdmin):
 
 @admin.register(Producto)
 class ProductoAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "precio_costo", "max_diario", "activo")
+    list_display = ("nombre", "precio_costo", "max_diario", "codigo_barra", "activo")
     list_filter = ("activo",)
     list_editable = ("precio_costo", "max_diario", "activo")
-    search_fields = ("nombre",)
+    search_fields = ("nombre", "codigo_barra")
 
 
 @admin.register(TarifaHora)

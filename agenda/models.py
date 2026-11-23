@@ -160,11 +160,20 @@ class Producto(models.Model):
     max_diario = models.PositiveIntegerField(
         default=0, help_text="Cantidad máxima que cada empleado puede retirar por día. 0 = sin límite."
     )
+    codigo_barra = models.CharField(
+        max_length=64, null=True, blank=True, unique=True,
+        help_text="Código de barras o contenido del QR del producto (opcional). Se usa para escanearlo desde la app.",
+    )
     activo = models.BooleanField(default=True)
     actualizado = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["nombre"]
+
+    def save(self, *args, **kwargs):
+        # Un código vacío se guarda como NULL, así no choca con la restricción de único.
+        self.codigo_barra = (self.codigo_barra or "").strip() or None
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.nombre

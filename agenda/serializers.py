@@ -99,7 +99,13 @@ class FeriadoSerializer(ValidarConModeloMixin, serializers.ModelSerializer):
 class ProductoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Producto
-        fields = ("id", "nombre", "precio_costo", "max_diario", "activo", "actualizado")
+        fields = ("id", "nombre", "precio_costo", "max_diario", "codigo_barra", "activo", "actualizado")
+
+    def validate_codigo_barra(self, valor):
+        valor = (valor or "").strip() or None
+        if valor and Producto.objects.filter(codigo_barra=valor).exclude(pk=getattr(self.instance, "pk", None)).exists():
+            raise serializers.ValidationError("Ya existe un producto con ese código.")
+        return valor
 
 
 class TarifaHoraSerializer(ValidarConModeloMixin, serializers.ModelSerializer):
