@@ -49,9 +49,22 @@ Están en `agenda/tests.py`, agrupados por tema:
 | `LiquidacionesTests` · `LiquidacionesApiTests` | Períodos, adelantos, pagos parciales, anulación, diferencias |
 | `HojaDelDiaTests` | `resumen-dia` |
 | `CodigoBarraTests` | Código de barras de productos |
+| `AdminBackofficeTests` | **Gestión desde el backoffice**, como la hace el encargado: todas las pantallas abren; altas, correcciones, anulaciones y rechazos de fichajes, retiros, adelantos, liquidaciones, tarifas, feriados, horarios, productos, parámetros y empleados responden con un mensaje, nunca con un error 500 |
 
 Todas heredan de `Base`, que arma empleado, encargado, parámetros y horario. **Toda regla nueva lleva su
 test**, y un bug corregido lleva el test que lo reproduce.
+
+**Los tests incluyen siempre la gestión desde el backoffice.** Todo cambio que toque un modelo, una regla
+o un formulario suma (o ajusta) su caso en `AdminBackofficeTests`, enviando el formulario como lo haría el
+navegador (`self.enviar(url, datos)` agrega los formularios de los inlines). Lo mismo para las pruebas
+manuales de cada entrega: además de la app, se prueban las altas y correcciones en el admin.
+
+## Formularios del admin: alta o edición
+
+Los modelos usan **id UUID con default**, así que un registro nuevo **ya tiene `pk`** antes de guardarse.
+Para saber si un formulario está agregando o editando, usar `es_edicion(form)` (`admin.py`), que mira
+`instance._state.adding`; **nunca** `if self.instance.pk`. Y en `clean()` del formulario todavía no se
+copiaron los datos al objeto: los valores nuevos están en `cleaned_data`, no en `self.instance`.
 
 ## Dónde poner cada cosa
 
@@ -99,7 +112,7 @@ regla marcada con 📱 en [Reglas de negocio](reglas-de-negocio.md):
 
 ## Checklist antes de un PR
 
-- [ ] `python manage.py test agenda` pasa.
+- [ ] `python manage.py test agenda` pasa, incluidos los tests del backoffice (`AdminBackofficeTests`).
 - [ ] Si cambió un modelo: hay migración y `seed_agenda` sigue funcionando.
 - [ ] Si cambió una regla 📱: está replicada en la app con su test.
 - [ ] Los mensajes de error se entienden sin conocer el código.

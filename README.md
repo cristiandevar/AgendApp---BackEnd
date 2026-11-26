@@ -23,7 +23,7 @@ python manage.py runserver 0.0.0.0:8000
 - API: <http://localhost:8000/api/>
 - Empleados de prueba: `ana` / `ana12345` y `luis` / `luis12345`
 
-Tests: `python manage.py test agenda` (58 tests).
+Tests: `python manage.py test agenda` (84 tests, incluidos los del backoffice).
 
 ## Documentación
 

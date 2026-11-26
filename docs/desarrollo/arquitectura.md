@@ -45,7 +45,7 @@ agenda/                    Única app del sistema (el label "agenda" se mantiene
 ├── views.py · urls.py     Endpoints REST
 ├── permisos.py            EsEncargado, EncargadoEditaTodosLeen
 ├── admin.py               Pantallas del encargado (formularios con motivo y auditoría)
-├── tests.py               58 tests (cálculos, reglas, API, servicios, liquidaciones, hoja del día)
+├── tests.py               84 tests (cálculos, reglas, API, servicios, liquidaciones, hoja del día, backoffice)
 ├── migrations/            0001…0005
 └── management/commands/
     └── seed_agenda.py     Datos iniciales y de ejemplo (idempotente)

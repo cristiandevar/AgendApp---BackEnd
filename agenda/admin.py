@@ -29,6 +29,28 @@ admin.site.site_title = "AgendApp - BackEnd"
 admin.site.index_title = "Administración"
 
 
+def es_edicion(form):
+    """
+    True si el formulario edita un registro existente. No se puede usar `instance.pk`: los
+    modelos tienen id UUID con default, así que un registro nuevo ya tiene pk antes de guardarse.
+    """
+    return not form.instance._state.adding
+
+
+class SoloEmpleadosMixin:
+    """
+    En los desplegables de empleado se ofrecen solo empleados (no el encargado). Se incluyen
+    los inactivos: también se les corrigen movimientos y se les liquida.
+    """
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "empleado":
+            kwargs["queryset"] = Usuario.objects.filter(rol=Usuario.Rol.EMPLEADO).order_by(
+                "first_name", "last_name", "username"
+            )
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
 @admin.register(Usuario)
 class UsuarioAdmin(UserAdmin):
     list_display = ("username", "first_name", "last_name", "rol", "modalidad_liquidacion", "is_active")
@@ -77,7 +99,7 @@ class ProductoAdmin(admin.ModelAdmin):
 
 
 @admin.register(TarifaHora)
-class TarifaHoraAdmin(HistorialProtegidoAdmin):
+class TarifaHoraAdmin(SoloEmpleadosMixin, HistorialProtegidoAdmin):
     list_display = ("empleado", "monto", "vigente_desde", "es_modificable")
     list_filter = ("empleado",)
 
@@ -90,7 +112,7 @@ class TarifaHoraAdmin(HistorialProtegidoAdmin):
 
 
 @admin.register(HorarioAsignado)
-class HorarioAsignadoAdmin(admin.ModelAdmin):
+class HorarioAsignadoAdmin(SoloEmpleadosMixin, admin.ModelAdmin):
     list_display = ("empleado", "fecha", "hora_inicio", "hora_fin")
     list_filter = ("empleado",)
     date_hierarchy = "fecha"
@@ -132,7 +154,7 @@ class DiaNoLiquidadoMixin:
 
     def validar_dia_no_liquidado(self, datos):
         fechas = [(datos.get("empleado"), datos.get("fecha"))]
-        if self.instance.pk:
+        if es_edicion(self):
             fechas.append((self.instance.empleado, self.instance.fecha))
         for empleado, fecha in fechas:
             if empleado and fecha:
@@ -149,6 +171,14 @@ class FichajeAdminForm(DiaNoLiquidadoMixin, forms.ModelForm):
     class Meta:
         model = Fichaje
         fields = ("empleado", "fecha", "hora", "tipo", "motivo", "anulado")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not es_edicion(self):
+            # Solo la fecha: la hora queda vacía a propósito. El encargado carga fichajes olvidados
+            # o corregidos (la hora real suele ser anterior) y una hora precargada que no se cambia
+            # pagaría horas que no se trabajaron. Para "ahora" está el atajo del calendario.
+            self.fields["fecha"].initial = timezone.localdate()
 
     def clean(self):
         datos = super().clean()
@@ -167,7 +197,7 @@ class FichajeAdminForm(DiaNoLiquidadoMixin, forms.ModelForm):
 
 
 @admin.register(Fichaje)
-class FichajeAdmin(admin.ModelAdmin):
+class FichajeAdmin(SoloEmpleadosMixin, admin.ModelAdmin):
     form = FichajeAdminForm
     list_display = ("empleado", "fecha", "hora", "tipo", "fuera_de_tolerancia", "anulado", "origen", "corregido")
     list_filter = ("empleado", "tipo", "anulado", "corregido", "fuera_de_tolerancia")
@@ -237,7 +267,8 @@ class RetiroAdminForm(DiaNoLiquidadoMixin, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if not self.instance.pk:
+        if not es_edicion(self):
+            self.fields["fecha"].initial = timezone.localdate()
             self.fields["hora"].initial = timezone.localtime().strftime("%H:%M")
 
     def clean(self):
@@ -251,7 +282,7 @@ class RetiroAdminForm(DiaNoLiquidadoMixin, forms.ModelForm):
 
 
 @admin.register(Retiro)
-class RetiroAdmin(admin.ModelAdmin):
+class RetiroAdmin(SoloEmpleadosMixin, admin.ModelAdmin):
     form = RetiroAdminForm
     list_display = ("empleado", "fecha", "hora", "producto", "cantidad", "precio_costo", "subtotal", "anulado", "origen", "corregido")
     list_filter = ("empleado", "anulado", "corregido")
@@ -312,14 +343,14 @@ class PagoAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if not self.instance.pk:
+        if not es_edicion(self):
             self.fields["fecha"].initial = timezone.localdate()
             self.fields["hora"].initial = timezone.localtime().strftime("%H:%M")
             del self.fields["anular"], self.fields["motivo"]
 
     def clean(self):
         datos = super().clean()
-        if self.instance.pk:
+        if es_edicion(self):
             if datos.get("anular"):
                 if not (datos.get("motivo") or "").strip():
                     raise ValidationError("El motivo de la anulación es obligatorio.")
@@ -334,7 +365,7 @@ class PagoAdminForm(forms.ModelForm):
 
 
 @admin.register(Pago)
-class PagoAdmin(admin.ModelAdmin):
+class PagoAdmin(SoloEmpleadosMixin, admin.ModelAdmin):
     form = PagoAdminForm
     list_display = ("empleado", "fecha", "hora", "tipo", "monto", "liquidacion", "anulado", "registrado_por")
     list_filter = ("empleado", "tipo", "anulado")
@@ -420,7 +451,7 @@ class LiquidacionAnularForm(forms.ModelForm):
 
 
 @admin.register(Liquidacion)
-class LiquidacionAdmin(admin.ModelAdmin):
+class LiquidacionAdmin(SoloEmpleadosMixin, admin.ModelAdmin):
     list_display = ("empleado", "desde", "hasta", "total_a_pagar", "monto_pagado", "saldo_resultante",
                     "estado", "diferencia")
     list_filter = ("empleado", "estado")
