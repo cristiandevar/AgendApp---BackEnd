@@ -123,10 +123,16 @@ cambios.
 
 ### Cargar un fichaje olvidado
 
-**Fichajes → Agregar**: empleado, fecha, hora, tipo y motivo de la corrección. En la libreta del
+**Fichajes → Agregar**: empleado, fecha, hora, tipo y motivo de la corrección. La fecha viene con la de
+hoy, pero **la hora viene vacía a propósito**: casi siempre se carga un fichaje olvidado, con una hora
+anterior, y una hora precargada que no se cambia pagaría horas que no se trabajaron. Si es de este
+momento, usá el atajo **Ahora**. En retiros y adelantos, la fecha y la hora vienen con las actuales. En la libreta del
 empleado aparece con un **lápiz** al margen, para que sepa que lo cargaste vos.
 
 ![Cargar un fichaje](img/11-fichaje-agregar.png)
+
+En los desplegables de empleado aparecen solo los empleados (no el encargado), incluidos los inactivos,
+para poder corregirles movimientos o liquidarlos.
 
 Reglas que el sistema controla por vos:
 

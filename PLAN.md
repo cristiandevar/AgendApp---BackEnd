@@ -12,7 +12,8 @@ Documento vivo para seguir el avance del proyecto. Se actualiza **al cerrar cada
 | 1 | Backend base | ✅ |
 | 2 | App Android base | ✅ |
 | 3 | Libreta del empleado | ✅ |
-| 4 | Sincronización | ⏳ |
+| 3.1 | Correcciones del backoffice | ✅ |
+| 4 | Sincronización | ⏸️ (en pausa hasta cerrar la 3.1) |
 | 5 | Backoffice móvil del encargado | ⏳ |
 | 6 | Reportes | ⏳ |
 | 7 | Cierre y puesta en producción | ⏳ |
@@ -41,6 +42,8 @@ Documento vivo para seguir el avance del proyecto. Se actualiza **al cerrar cada
 4. Toda regla de negocio nueva o modificada lleva **tests** y se documenta en `docs/` (reglas de negocio, guías de uso).
 5. Los cambios de base de datos van siempre en **migraciones nuevas**: no se reescriben las que ya están aplicadas.
 6. Las decisiones que dependen del negocio se consultan antes de implementarlas; las técnicas se proponen con su justificación.
+7. **Cada lote de pruebas incluye las de origen backend** (desde el 26/11/2026): los tests automáticos cubren la gestión desde el backoffice (`AdminBackofficeTests`: cada pantalla abre y cada alta, corrección, anulación o rechazo responde con un mensaje, nunca con un error 500), y las pruebas manuales de cada entrega incluyen las operaciones del encargado en el admin sobre lo que se tocó, además de la app.
+8. **No se continúa si el backend tiene errores** de este tipo: un error 500 en el backoffice detiene la fase en curso hasta corregirlo, con su test.
 
 ### Versionado (al cerrar cada fase)
 - Un **commit por fase terminada** en cada repositorio que la fase modificó, en una rama con el formato del proyecto: `AAAAMMDD_descripcion` (por ejemplo `20261115_fase_2_app_base`), seguido de **push** y Pull Request a `main`.
@@ -261,28 +264,65 @@ Cada evento ocupa un renglón dividido en **4 secciones**:
 
 ---
 
-### Fase 4 — Sincronización ⏳
+### Fase 3.1 — Correcciones del backoffice ✅
+**Origen:** el 26/11/2026, al probar la 4a, agregar un fichaje o un retiro desde el admin daba **error 500** (`RelatedObjectDoesNotExist: Fichaje has no empleado`). Se pausa la Fase 4 hasta corregirlo.
+
+**Estado:** probada por el usuario y versionada (26/11/2026). Rama `20261126_fase_3_1_correcciones_backoffice` en el BackEnd, creada desde `main`. La entrega 4a quedó guardada en un *stash* en la rama de la Fase 4 (y copia en el entorno de Claude) y se retoma al cerrar esta fase.
+
+**Causa raíz:** los formularios del admin distinguían "agregar" de "editar" con `if self.instance.pk`, pero los modelos tienen id UUID con default: un registro nuevo ya tiene `pk` antes de guardarse. Viene del commit inicial del backend (21/10/2026); no había tests del admin que lo detectaran.
+
+**Correcciones (`agenda/admin.py`):**
+- [x] `es_edicion(form)` (mira `instance._state.adding`) reemplaza `if self.instance.pk` en los 4 lugares:
+  - `DiaNoLiquidadoMixin.validar_dia_no_liquidado` → error 500 al **agregar fichajes y retiros**.
+  - `RetiroAdminForm.__init__` → no sugería la hora actual.
+  - `PagoAdminForm.__init__` → no sugería fecha y hora.
+  - `PagoAdminForm.clean` → **no validaba el adelanto nuevo**: aceptaba fechas futuras y días ya liquidados.
+- [x] Ajuste: en los desplegables de empleado aparecen solo empleados (no el encargado), incluidos los inactivos.
+- [x] Valores por defecto en las altas (propuesto por el usuario y acordado el 26/11/2026): adelanto y retiro traen fecha y hora actuales; el **fichaje trae la fecha de hoy y la hora vacía a propósito** (se cargan fichajes olvidados o corregidos: una hora precargada que no se cambia pagaría horas no trabajadas; para "ahora" está el atajo). Fechas con `timezone.localdate()` (se adapta al idioma, no texto fijo).
+
+**Tests:** `AdminBackofficeTests`, 26 tests nuevos de gestión desde el backoffice (todas las pantallas abren; altas, correcciones, anulaciones y rechazos de fichajes, retiros, adelantos, liquidaciones, tarifas, feriados, horarios, productos, parámetros y empleados; el caso reportado). Antes de corregir, 10 fallaban por esta causa. **84 tests en verde** (incluidos los valores por defecto de cada alta y que un fichaje sin hora no se guarda). Además, prueba en navegador real de las altas de fichaje, retiro y adelanto.
+
+**Docs:** `como-aportar.md` (regla de alta/edición en formularios del admin y tests del backoffice obligatorios), guía del encargado, README y arquitectura.
+
+**Criterio de cierre:** el usuario prueba en el admin las altas, correcciones y anulaciones de fichajes, retiros, adelantos y liquidaciones sin errores; commit, push, PR y merge a `main`. Después se retoma la 4a sobre el `main` corregido.
+
+---
+
+### Fase 4 — Sincronización ⏸️
 **Objetivo:** que lo registrado en el celular llegue al servidor y que el celular reciba lo que cambió en el servidor.
 
-**A realizar — Backend:**
-- [ ] `POST /api/sync/subir/`: lote de fichajes, retiros, anulaciones y modificaciones con su UUID y el momento real de cada acción en el celular. Procesa con `servicios.py`, es idempotente (reenviar lo mismo no duplica) y responde qué se aceptó y qué se rechazó con el motivo.
-- [ ] `GET /api/sync/bajar/?desde=<marca>`: lo que cambió desde la última sincronización (productos, parámetros, feriados, tarifas, horarios, fichajes y retiros propios —incluidas las correcciones del encargado—, pagos y liquidaciones).
-- [ ] Registrar la diferencia entre la hora del celular y la de llegada, para detectar relojes desajustados.
-- [ ] Tests de idempotencia, rechazos y sync tardío sobre días liquidados.
-- [ ] Llevar al backend la regla de la app: el empleado solo puede anular su **último fichaje vigente del día** (hoy `anular_fichaje_empleado` no lo controla).
+**Estado:** comportamiento definido y confirmado (23/11/2026). Rama `20261123_fase_4_sincronizacion` en ambos repos, creada desde `main`. Entrega 4a implementada; **en pausa desde el 26/11/2026** hasta cerrar la Fase 3.1 (guardada en un *stash* de esa rama).
 
-**A realizar — Android:**
-- [ ] WorkManager, con esta frecuencia (acordada el 22/11/2026):
-  - **Al registrar** un fichaje o retiro: si hay red, se envía en el momento (para que el encargado reciba el aviso casi en tiempo real).
-  - **Sin red:** queda pendiente y se envía solo al volver la conexión, aunque la app esté cerrada.
-  - **Periódica cada 15 minutos** (el mínimo de Android) como respaldo: sube lo pendiente y baja lo que cambió en el servidor (correcciones del encargado, pagos, catálogo).
-  - **A demanda:** el botón de actualizar sube y baja todo.
-- [ ] Cola de operaciones pendientes (alta, modificación y anulación) para que una modificación o anulación de algo ya sincronizado llegue como tal al servidor. Requiere Room v3 con **migración real**.
-- [ ] Al aceptarse en el servidor se apaga la marca de pendiente (puntito gris); si se rechaza, la hoja lo muestra con el motivo.
-- [ ] Aplicar lo que baja del servidor y adoptar su versión ante cualquier diferencia.
-- [ ] Mostrar en la hoja lo rechazado por el servidor y el estado de sincronización.
+**Decisiones confirmadas (23/11/2026):**
+- **Reloj del celular desajustado:** se acepta igual; el servidor mide el desfase (hora del servidor − hora del celular al enviar) y, si supera el parámetro `desfase_reloj_minutos` (5 min), corrige la fecha y hora de la hoja y le avisa al encargado (destacado, uno por hora como máximo).
+- **Rechazos:** lo que el servidor rechaza queda **visible en la hoja del empleado, en rojo, con el motivo** al tocarlo, y no suma ni resta.
+- **Plazo sin conexión:** cuenta la **hora del celular** en que el empleado anuló o modificó, corregida por el desfase medido, aunque llegue horas después.
+- Un fichaje sincronizado que el servidor ve fuera de tolerancia **sin motivo** (por ejemplo, porque el encargado cambió el horario mientras el celular no tenía señal) se acepta y el aviso lo destaca como "sin motivo": ya ocurrió.
+- El **catálogo** baja completo en cada sincronización (es chico y así se reflejan las bajas); los **movimientos**, solo los que cambiaron (con 2 minutos de solape).
 
-**Criterio de cierre:** se registra sin conexión, se recupera la red y los datos aparecen en el servidor (y las notificaciones le llegan al encargado); una corrección del encargado aparece en el celular del empleado.
+**Entregas:**
+
+- [ ] **4a — Servidor** (implementada el 23/11/2026, **pendiente de prueba**; sin commitear):
+  - [x] `POST /api/sync/subir/`: operaciones en orden (`FICHAJE_ALTA`, `FICHAJE_ANULAR`, `RETIRO_ALTA`, `RETIRO_MODIFICAR`, `RETIRO_ANULAR`), cada una con su id y el momento real en el celular; se aplican una por una con `servicios.py`; idempotente (`OperacionSync`); responde aceptada/rechazada con motivo y el desfase medido.
+  - [x] `GET /api/sync/bajar/?desde=<marca>`: catálogo completo + fichajes, retiros, pagos y liquidaciones propios que cambiaron (incluidas las correcciones del encargado).
+  - [x] Desfase del reloj guardado en cada fichaje y retiro; parámetro `desfase_reloj_minutos`; aviso `RELOJ_DESAJUSTADO`.
+  - [x] Regla llevada al servidor: el empleado solo anula su **último fichaje vigente del día**.
+  - [x] Admin: *Operaciones sincronizadas* (solo lectura) y desfase visible en fichajes y retiros.
+  - [x] Migración `0006_sincronizacion`. **72 tests en verde** (14 nuevos en `SincronizacionTests`: idempotencia, rechazos, plazo con la hora del celular, reloj desajustado, días liquidados, datos ajenos, API).
+  - [x] Docs actualizados: API (sincronización con ejemplos reales), reglas, modelo de datos, arquitectura y guía del encargado (con capturas nuevas).
+- [ ] **4b — Motor de sincronización en el celular:**
+  - Room v3 con **migración real**: tabla de operaciones pendientes (cola) y, en fichajes y retiros, marca de rechazado con su motivo.
+  - Cada fichaje, anulación, retiro o modificación se guarda junto con su operación en la cola (en una transacción).
+  - `SincronizacionRepository`: sube la cola en orden, apaga la marca de pendiente de lo aceptado, marca lo rechazado y baja lo que cambió (adoptando la versión del servidor).
+  - WorkManager: al registrar (si hay red, en el momento), al volver la conexión, periódica cada 15 minutos y a demanda.
+  - El dominio ignora lo rechazado en cuentas y reglas (como lo anulado). Tests.
+- [ ] **4c — Lo que ve el empleado:**
+  - Estado de sincronización en la barra (sincronizado, N pendientes, sin conexión, error).
+  - Renglón rechazado en rojo con su motivo en el detalle; aviso cuando el servidor rechaza una anulación o modificación (el renglón vuelve a como está en el servidor).
+  - El botón de actualizar sincroniza todo; cerrar sesión avisa lo que falta enviar.
+  - Guía del empleado y docs del FrontEnd actualizados.
+
+**Criterio de cierre:** se registra sin conexión, se recupera la red y los datos aparecen en el servidor (y las notificaciones le llegan al encargado); una corrección del encargado aparece en el celular del empleado; lo rechazado se ve con su motivo.
 
 ---
 
@@ -373,3 +413,6 @@ Cada evento ocupa un renglón dividido en **4 secciones**:
 | 22/11/2026 | 3 | Entrega 3c implementada (retiros con búsqueda, escáner, tope diario, modificar y anular); pendiente de prueba |
 | 22/11/2026 | 3 | Prueba de la 3c: montos en positivo en popups; el plazo se mostraba al minuto pero corre con segundos → se muestra el momento de registro y una cuenta regresiva, y Modificar se bloquea al vencer. 36 tests en verde |
 | 22/11/2026 | 3 | Fase 3 cerrada: commit de la 3c (`3736c7c`) en la PC; documentación en `docs/` de ambos repos (desarrollo y uso, con imágenes); push y PR a cargo del usuario |
+| 23/11/2026 | 4 | Fase 4 definida (reloj desajustado: aceptar y avisar; rechazos visibles con motivo; plazo con la hora del celular). Entrega 4a (servidor) implementada: `sync/subir`, `sync/bajar`, desfase de reloj, último fichaje anulable; 72 tests en verde; pendiente de prueba |
+| 26/11/2026 | 3.1 | Error 500 al agregar fichajes y retiros desde el admin (`if self.instance.pk` con ids UUID). Se pausa la Fase 4 y se abre la 3.1: 4 condiciones corregidas, desplegables solo con empleados, 25 tests del backoffice (83 en total), regla nueva: cada lote de pruebas incluye las de origen backend |
+| 26/11/2026 | 3.1 | Probada por el usuario (alta, modificación y anulación desde el admin). Valores por defecto acordados: fichaje con fecha de hoy y hora vacía; retiro y adelanto con fecha y hora actuales. 84 tests. Se versiona |

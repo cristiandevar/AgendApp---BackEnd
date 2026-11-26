@@ -674,3 +674,313 @@ class CodigoBarraTests(Base):
     def test_listado_incluye_codigo(self):
         ana, _ = ApiTests.cliente(self, "ana")
         self.assertIn("codigo_barra", ana.get("/api/productos/").json()[0])
+
+
+class AdminBackofficeTests(Base):
+    """
+    Gestión desde el backoffice (Django Admin), como la hace el encargado: cada pantalla abre
+    y cada alta, corrección, anulación y rechazo responde con un mensaje, nunca con un error 500.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from django.test import Client
+
+        self.c = Client()
+        self.c.force_login(self.encargado)
+        self.hoy = timezone.localdate()
+        HorarioAsignado.objects.create(empleado=self.ana, fecha=DIA1, hora_inicio=time(8, 0), hora_fin=time(12, 0))
+
+    # ---------- utilidades ----------
+
+    def url(self, modelo, accion="add", *args):
+        from django.urls import reverse
+
+        return reverse(f"admin:agenda_{modelo}_{accion}", args=args)
+
+    def enviar(self, url, datos):
+        """POST como el navegador: suma los formularios de gestión de los inlines que tenga la página."""
+        import re
+
+        pagina = self.c.get(url).content.decode()
+        gestion = dict(re.findall(r'name="([\w-]+-(?:TOTAL|INITIAL|MIN_NUM|MAX_NUM)_FORMS)"[^>]*value="(\d+)"', pagina))
+        return self.c.post(url, {**gestion, **datos})
+
+    def errores(self, respuesta):
+        """Mensajes de error del formulario (para que una falla se lea en el test)."""
+        form = respuesta.context["adminform"].form if respuesta.context and "adminform" in respuesta.context else None
+        return form.errors if form is not None else {}
+
+    def fichaje(self, **extra):
+        return {"empleado": self.ana.pk, "fecha": str(DIA1), "hora": "08:05", "tipo": "ENTRADA", "motivo": "",
+                "motivo_correccion": "Se olvidó de fichar", **extra}
+
+    def retiro(self, **extra):
+        return {"empleado": self.ana.pk, "fecha": str(DIA1), "hora": "10:00", "producto": self.cafe.pk, "cantidad": 1,
+                "motivo_correccion": "Lo retiró sin registrarlo", **extra}
+
+    def liquidar_dia1(self):
+        fichar(self.ana, DIA1, "ENTRADA", 8, 0)
+        fichar(self.ana, DIA1, "SALIDA", 12, 0)
+        return liquidaciones.liquidar(self.ana, hasta=DIA1, monto_pagado=Decimal("8000"), registrado_por=self.encargado)
+
+    # ---------- todas las pantallas abren ----------
+
+    def test_todas_las_pantallas_abren(self):
+        from django.contrib import admin
+        from django.urls import reverse
+
+        f = fichar(self.ana, DIA1, "ENTRADA", 8, 0)
+        AuditoriaFichaje.objects.create(fichaje=f, accion="CREAR", usuario=self.encargado, motivo="x")
+        r = retirar(self.ana, DIA1, self.cafe, 1)
+        AuditoriaRetiro.objects.create(retiro=r, accion="CREAR", usuario=self.encargado, motivo="x")
+        Pago.objects.create(empleado=self.ana, fecha=DIA1, hora=time(18, 0), monto=Decimal("1000"),
+                            registrado_por=self.encargado)
+        Feriado.objects.create(fecha=self.hoy + timedelta(days=30), descripcion="Futuro")
+        Parametro.objects.get_or_create(clave="tolerancia_minutos", defaults={"valor": Decimal("15")})
+        Notificacion.objects.create(destinatario=self.encargado, empleado=self.ana, tipo="ENTRADA", mensaje="x",
+                                    fecha=DIA1, referencia_id=f.pk)
+        fichar(self.ana, DIA1, "SALIDA", 12, 0)
+        liquidaciones.liquidar(self.ana, hasta=DIA1, monto_pagado=Decimal("0"), registrado_por=self.encargado)
+
+        for modelo, modelo_admin in admin.site._registry.items():
+            etiqueta = f"{modelo._meta.app_label}_{modelo._meta.model_name}"
+            with self.subTest(pantalla=etiqueta):
+                self.assertEqual(self.c.get(reverse(f"admin:{etiqueta}_changelist")).status_code, 200)
+                if modelo_admin.has_add_permission(type("R", (), {"user": self.encargado})()):
+                    self.assertEqual(self.c.get(reverse(f"admin:{etiqueta}_add")).status_code, 200)
+                obj = modelo_admin.get_queryset(type("R", (), {"user": self.encargado})()).first()
+                if obj is not None:
+                    self.assertEqual(self.c.get(reverse(f"admin:{etiqueta}_change", args=[obj.pk])).status_code, 200)
+
+    # ---------- fichajes ----------
+
+    def test_alta_de_fichaje(self):
+        r = self.enviar(self.url("fichaje"), self.fichaje())
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        f = Fichaje.objects.get()
+        self.assertEqual((f.origen, f.corregido, f.hora), ("ENCARGADO", True, time(8, 5)))
+        a = AuditoriaFichaje.objects.get()
+        self.assertEqual((a.accion, a.motivo, a.usuario), ("CREAR", "Se olvidó de fichar", self.encargado))
+
+    def test_alta_de_fichaje_sin_motivo_de_correccion(self):
+        r = self.enviar(self.url("fichaje"), self.fichaje(motivo_correccion=""))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("motivo_correccion", self.errores(r))
+        self.assertFalse(Fichaje.objects.exists())
+
+    def test_alta_de_fichaje_con_datos_incompletos_no_rompe(self):
+        r = self.enviar(self.url("fichaje"), self.fichaje(empleado="", hora=""))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("empleado", self.errores(r))
+
+    def test_alta_de_fichaje_que_rompe_la_secuencia(self):
+        fichar(self.ana, DIA1, "ENTRADA", 8, 0)
+        r = self.enviar(self.url("fichaje"), self.fichaje(hora="09:00"))  # otra entrada sin salida
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Secuencia inválida")
+        self.assertEqual(Fichaje.objects.count(), 1)
+
+    def test_editar_y_anular_fichaje(self):
+        f = fichar(self.ana, DIA1, "ENTRADA", 8, 0)
+        r = self.enviar(self.url("fichaje", "change", f.pk), self.fichaje(hora="08:10", motivo_correccion="Hora mal"))
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        r = self.enviar(self.url("fichaje", "change", f.pk), self.fichaje(hora="08:10", anulado="on",
+                                                                         motivo_correccion="Duplicado"))
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        f.refresh_from_db()
+        self.assertTrue(f.anulado and f.anulado_en and f.corregido)
+        self.assertEqual(list(AuditoriaFichaje.objects.order_by("fecha_hora").values_list("accion", flat=True)),
+                         ["MODIFICAR", "ANULAR"])
+
+    def test_fichaje_en_dia_liquidado(self):
+        self.liquidar_dia1()
+        r = self.enviar(self.url("fichaje"), self.fichaje(hora="13:00"))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "liquidado")
+        # Tampoco se puede mover un fichaje de un día libre a uno liquidado.
+        libre = fichar(self.ana, DIA2, "ENTRADA", 8, 0)
+        r = self.enviar(self.url("fichaje", "change", libre.pk), self.fichaje(hora="13:00"))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "liquidado")
+
+    # ---------- retiros ----------
+
+    def test_alta_de_retiro(self):
+        r = self.enviar(self.url("retiro"), self.retiro(cantidad=2))
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        ret = Retiro.objects.get()
+        self.assertEqual((ret.origen, ret.corregido, ret.precio_costo, ret.cantidad), ("ENCARGADO", True, Decimal("800"), 2))
+        self.assertEqual(AuditoriaRetiro.objects.get().accion, "CREAR")
+
+    def test_alta_de_retiro_que_supera_el_maximo(self):
+        r = self.enviar(self.url("retiro"), self.retiro(cantidad=3))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "Supera el máximo diario")
+        self.assertFalse(Retiro.objects.exists())
+
+    def test_editar_retiro_a_otro_producto_toma_su_precio(self):
+        ret = retirar(self.ana, DIA1, self.cafe, 1)
+        r = self.enviar(self.url("retiro", "change", ret.pk), self.retiro(producto=self.sandwich.pk,
+                                                                        motivo_correccion="Era un sándwich"))
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        ret.refresh_from_db()
+        self.assertEqual((ret.producto, ret.precio_costo), (self.sandwich, Decimal("1600")))
+
+    def test_retiro_en_dia_liquidado(self):
+        self.liquidar_dia1()
+        r = self.enviar(self.url("retiro"), self.retiro())
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "liquidado")
+
+    # ---------- pagos (adelantos) ----------
+
+    def valor_inicial(self, modelo, campo):
+        """Valor que trae el campo al abrir el formulario de alta (None si viene vacío)."""
+        import re
+
+        html = self.c.get(self.url(modelo)).content.decode()
+        etiqueta = re.search(rf'<input[^>]*name="{campo}"[^>]*>', html).group(0)
+        valor = re.search(r'value="([^"]*)"', etiqueta)
+        return valor.group(1) if valor else None
+
+    def test_los_formularios_de_alta_traen_fecha_y_hora(self):
+        hoy = self.hoy.strftime("%d/%m/%Y")
+        ahora = timezone.localtime().strftime("%H:")
+        # Adelanto y retiro: fecha y hora actuales.
+        self.assertEqual(self.valor_inicial("pago", "fecha"), hoy)
+        self.assertTrue(self.valor_inicial("pago", "hora").startswith(ahora))
+        self.assertEqual(self.valor_inicial("retiro", "fecha"), hoy)
+        self.assertTrue(self.valor_inicial("retiro", "hora").startswith(ahora))
+        # Fichaje: la fecha sí; la hora queda vacía a propósito (se carga un fichaje olvidado o corregido).
+        self.assertEqual(self.valor_inicial("fichaje", "fecha"), hoy)
+        self.assertIsNone(self.valor_inicial("fichaje", "hora"))
+        # El alta de un adelanto no muestra los campos de anulación.
+        r = self.c.get(self.url("pago")).content.decode()
+        self.assertNotIn('name="anular"', r)
+        self.assertNotIn('name="motivo"', r)
+
+    def test_fichaje_sin_hora_no_se_guarda(self):
+        r = self.enviar(self.url("fichaje"), self.fichaje(hora=""))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("hora", self.errores(r))
+        self.assertFalse(Fichaje.objects.exists())
+
+    def test_alta_de_adelanto(self):
+        r = self.enviar(self.url("pago"), {"empleado": self.ana.pk, "fecha": str(self.hoy), "hora": "10:00",
+                                          "monto": "5000", "observacion": "Para el colectivo"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        p = Pago.objects.get()
+        self.assertEqual((p.tipo, p.registrado_por, p.monto), ("ADELANTO", self.encargado, Decimal("5000")))
+
+    def test_adelanto_con_fecha_futura(self):
+        r = self.enviar(self.url("pago"), {"empleado": self.ana.pk, "fecha": str(self.hoy + timedelta(days=10)),
+                                          "hora": "10:00", "monto": "5000"})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Pago.objects.exists())
+
+    def test_adelanto_en_dia_liquidado(self):
+        self.liquidar_dia1()
+        r = self.enviar(self.url("pago"), {"empleado": self.ana.pk, "fecha": str(DIA1), "hora": "19:00", "monto": "100"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "liquidado")
+        self.assertEqual(Pago.objects.filter(tipo="ADELANTO").count(), 0)
+
+    def test_anular_adelanto(self):
+        p = Pago.objects.create(empleado=self.ana, fecha=self.hoy, hora=time(10, 0), monto=Decimal("5000"),
+                                registrado_por=self.encargado)
+        r = self.enviar(self.url("pago", "change", p.pk), {"anular": "on", "motivo": ""})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "El motivo de la anulación es obligatorio")
+        r = self.enviar(self.url("pago", "change", p.pk), {"anular": "on", "motivo": "Se cargó dos veces"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        p.refresh_from_db()
+        self.assertTrue(p.anulado)
+
+    # ---------- liquidaciones ----------
+
+    def test_liquidar_y_anular(self):
+        fichar(self.ana, DIA1, "ENTRADA", 8, 0)
+        fichar(self.ana, DIA1, "SALIDA", 12, 0)
+        r = self.enviar(self.url("liquidacion"), {"empleado": self.ana.pk, "hasta": str(DIA1), "monto_pagado": "8000"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        liq = Liquidacion.objects.get()
+        self.assertEqual((liq.total_a_pagar, liq.saldo_resultante), (Decimal("8000.00"), Decimal("0.00")))
+        r = self.enviar(self.url("liquidacion", "change", liq.pk), {"anular": "on", "motivo": ""})
+        self.assertContains(r, "El motivo de la anulación es obligatorio")
+        r = self.enviar(self.url("liquidacion", "change", liq.pk), {"anular": "on", "motivo": "Faltó un retiro"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        liq.refresh_from_db()
+        self.assertEqual(liq.estado, "ANULADA")
+
+    def test_liquidar_hasta_un_dia_futuro(self):
+        r = self.enviar(self.url("liquidacion"), {"empleado": self.ana.pk, "hasta": str(self.hoy + timedelta(days=5)),
+                                                 "monto_pagado": "0"})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(Liquidacion.objects.exists())
+
+    # ---------- configuración ----------
+
+    def test_tarifas(self):
+        r = self.enviar(self.url("tarifahora"), {"empleado": self.ana.pk, "monto": "3000", "vigente_desde": str(DIA1)})
+        self.assertContains(r, "no puede ser anterior a hoy")
+        r = self.enviar(self.url("tarifahora"), {"empleado": self.ana.pk, "monto": "3000",
+                                                "vigente_desde": str(self.hoy + timedelta(days=1))})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        r = self.enviar(self.url("tarifahora"), {"empleado": "", "monto": "3000", "vigente_desde": str(self.hoy)})
+        self.assertEqual(r.status_code, 200)
+
+    def test_feriados(self):
+        r = self.enviar(self.url("feriado"), {"fecha": str(DIA1), "descripcion": "Pasado", "multiplicador": "2"})
+        self.assertContains(r, "ya pasó")
+        r = self.enviar(self.url("feriado"), {"fecha": str(self.hoy + timedelta(days=20)), "descripcion": "Futuro",
+                                             "multiplicador": "2"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+
+    def test_horarios(self):
+        r = self.enviar(self.url("horarioasignado"), {"empleado": self.ana.pk, "fecha": str(DIA1),
+                                                     "hora_inicio": "11:00", "hora_fin": "13:00"})
+        self.assertEqual(r.status_code, 200)  # se superpone con 08-12
+        r = self.enviar(self.url("horarioasignado"), {"empleado": self.ana.pk, "fecha": str(DIA1),
+                                                     "hora_inicio": "16:00", "hora_fin": "20:00"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        r = self.enviar(self.url("horarioasignado"), {"empleado": "", "fecha": str(DIA1),
+                                                     "hora_inicio": "16:00", "hora_fin": "20:00"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_productos_y_parametros(self):
+        r = self.enviar(self.url("producto"), {"nombre": "Alfajor", "precio_costo": "700", "max_diario": "2",
+                                              "codigo_barra": "  ", "activo": "on"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        self.assertIsNone(Producto.objects.get(nombre="Alfajor").codigo_barra)
+        p, _ = Parametro.objects.get_or_create(clave="tolerancia_minutos", defaults={"valor": Decimal("15")})
+        r = self.enviar(self.url("parametro", "change", p.pk), {"clave": p.clave, "valor": "20"})
+        self.assertEqual(r.status_code, 302, self.errores(r))
+
+    def test_alta_de_empleado(self):
+        r = self.enviar(self.url("usuario"), {"username": "carla", "password1": "Clave-segura-123",
+                                             "password2": "Clave-segura-123", "usable_password": "true",
+                                             "first_name": "Carla", "last_name": "Ruiz", "rol": "EMPLEADO",
+                                             "modalidad_liquidacion": "SEMANAL"})
+        self.assertIn(r.status_code, (302,), self.errores(r))
+        carla = Usuario.objects.get(username="carla")
+        self.assertEqual((carla.rol, carla.modalidad_liquidacion, carla.is_staff), ("EMPLEADO", "SEMANAL", False))
+
+
+    def test_el_encargado_no_aparece_como_empleado(self):
+        r = self.c.get(self.url("fichaje")).content.decode()
+        opciones = r.split('name="empleado"')[1].split("</select>")[0]
+        self.assertIn(f'value="{self.ana.pk}"', opciones)
+        self.assertNotIn(f'value="{self.encargado.pk}"', opciones)
+        r = self.enviar(self.url("fichaje"), self.fichaje(empleado=self.encargado.pk))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("empleado", self.errores(r))
+
+    def test_caso_reportado_alta_de_fichaje_de_hoy(self):
+        # 26/11/2026: alta de una entrada de hoy, fuera de horario, con motivo (antes daba error 500).
+        r = self.enviar(self.url("fichaje"), self.fichaje(fecha=str(self.hoy), hora="00:41:38",
+                                                          motivo="Agregado desde BackOffice",
+                                                          motivo_correccion="Corrección de prueba"))
+        self.assertEqual(r.status_code, 302, self.errores(r))
+        f = Fichaje.objects.get(fecha=self.hoy)
+        self.assertEqual((f.motivo, f.fuera_de_tolerancia, f.origen), ("Agregado desde BackOffice", True, "ENCARGADO"))
